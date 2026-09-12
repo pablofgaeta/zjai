@@ -1,0 +1,306 @@
+//! The on-disk agent status record format, shared by both plugins.
+//!
+//! Records are written by `agent-status-notify`.
+//!
+//! Zellij preopens exactly four directories for a plugin: `/host`, `/data`,
+//! `/cache` and `/tmp` (zellij-server/src/plugins/plugin_loader.rs). `$HOME`
+//! is therefore unreachable from inside the wasm guest, so the records live
+//! under `/tmp`, which the host exposes as `ZELLIJ_TMP_DIR`
+//! (`temp_dir()/zellij-<uid>`). The writer resolves that same directory from
+//! the host side; see `agent-status-notify`.
+//!
+//! One file per pane, named for the pane id, containing:
+//!
+//! ```text
+//! <status> <epoch_seconds> <source>
+//! ```
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub const WORKING_FRAMES: &[&str] = &[
+    "✢", "✢", "✻", "✻", "✽", "✽", "✶", "✶", "✽", "✽", "✻", "✻",
+];
+pub const BLOCKED_FRAMES: &[&str] = &["■", "■", "■", "□", "□", "□"];
+
+const STATUS_ROOT: &str = "/tmp/agent-status";
+const SEEN_DIR: &str = ".seen";
+
+/// Backstop for an agent that died without clearing its record. Deliberately
+/// generous: a single long tool call legitimately holds `Working` for a long
+/// time without the producing hook firing again, so this exists to recover
+/// from a kill, never to infer liveness.
+const STALE_AFTER_SECS: u64 = 30 * 60;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Status {
+    Working,
+    Blocked,
+    Done,
+    Idle,
+    Unknown,
+    Error,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Record {
+    pub status: Status,
+    pub written_at: Option<u64>,
+}
+
+impl Status {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "working" => Some(Status::Working),
+            "blocked" => Some(Status::Blocked),
+            "done" => Some(Status::Done),
+            "idle" => Some(Status::Idle),
+            "unknown" => Some(Status::Unknown),
+            "error" => Some(Status::Error),
+            _ => Some(Status::Unknown),
+        }
+    }
+
+    pub fn glyph(self, animation_frame: usize) -> &'static str {
+        match self {
+            Status::Working => WORKING_FRAMES[animation_frame % WORKING_FRAMES.len()],
+            Status::Blocked => BLOCKED_FRAMES[animation_frame % BLOCKED_FRAMES.len()],
+            Status::Done => "●",
+            Status::Idle => "○",
+            Status::Unknown => "?",
+            Status::Error => "✗",
+        }
+    }
+
+    pub fn is_animated(self) -> bool {
+        matches!(self, Status::Working | Status::Blocked)
+    }
+
+    fn priority(self) -> u8 {
+        match self {
+            Status::Idle => 0,
+            Status::Unknown => 1,
+            Status::Working => 2,
+            Status::Done => 3,
+            Status::Error => 4,
+            Status::Blocked => 5,
+        }
+    }
+}
+
+/// The most urgent of two statuses, for a tab holding several agent panes.
+pub fn merge(left: Status, right: Status) -> Status {
+    if right.priority() > left.priority() {
+        right
+    } else {
+        left
+    }
+}
+
+fn now_secs() -> Option<u64> {
+    // Guarded rather than unwrapped: if the sandbox declines to provide a
+    // clock, expiry switches off instead of taking the plugin down.
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_secs())
+}
+
+fn parse_record(contents: &str, now: Option<u64>) -> Option<Record> {
+    let mut fields = contents.split_whitespace();
+    let status = Status::parse(fields.next()?)?;
+    let written_at = fields.next().and_then(|field| field.parse::<u64>().ok());
+
+    if let (Some(now), Some(written_at)) = (now, written_at) {
+        if now.saturating_sub(written_at) > STALE_AFTER_SECS {
+            return None;
+        }
+    }
+
+    Some(Record { status, written_at })
+}
+
+fn session_dir(session_name: &str) -> PathBuf {
+    [STATUS_ROOT, session_name].iter().collect()
+}
+
+fn seen_dir(session_name: &str) -> PathBuf {
+    session_dir(session_name).join(SEEN_DIR)
+}
+
+fn seen_path(session_name: &str, pane_id: u32) -> PathBuf {
+    seen_dir(session_name).join(pane_id.to_string())
+}
+
+/// Status records for one session, keyed by terminal pane id.
+///
+/// Unreadable records are skipped rather than surfaced: this runs on a timer,
+/// and a transient read failure should read as "no status" rather than as an
+/// error state. Malformed status values are parsed as `Unknown`.
+pub fn read_session_records(session_name: &str) -> HashMap<u32, Record> {
+    let mut records = HashMap::new();
+    let now = now_secs();
+
+    let Ok(entries) = fs::read_dir(session_dir(session_name)) else {
+        return records;
+    };
+
+    for entry in entries.flatten() {
+        let Some(pane_id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue; // skips the writer's temp files and metadata dirs, e.g. "12.4567" or ".seen"
+        };
+        let Ok(contents) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if let Some(record) = parse_record(&contents, now) {
+            records.insert(pane_id, record);
+        }
+    }
+    records
+}
+
+/// Statuses for one session, keyed by terminal pane id.
+pub fn read_session(session_name: &str) -> HashMap<u32, Status> {
+    read_session_records(session_name)
+        .into_iter()
+        .map(|(pane_id, record)| (pane_id, record.status))
+        .collect()
+}
+
+/// Records that the current done status for a pane has been seen.
+pub fn mark_done_seen(session_name: &str, pane_id: u32, written_at: Option<u64>) {
+    let dir = seen_dir(session_name);
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let target = seen_path(session_name, pane_id);
+    let tmp = dir.join(format!("{}.tmp", pane_id));
+    let contents = written_at.map(|t| t.to_string()).unwrap_or_default();
+    if fs::write(&tmp, contents).is_ok() {
+        let _ = fs::rename(tmp, target);
+    }
+}
+
+/// Returns whether this exact done record has been seen.
+pub fn is_done_seen(session_name: &str, pane_id: u32, record: Record) -> bool {
+    if record.status != Status::Done {
+        return false;
+    }
+    let Ok(contents) = fs::read_to_string(seen_path(session_name, pane_id)) else {
+        return false;
+    };
+    match record.written_at {
+        Some(written_at) => contents.trim().parse::<u64>().ok() == Some(written_at),
+        None => true,
+    }
+}
+
+/// Removes stale seen markers for panes that are no longer done.
+pub fn cleanup_seen(session_name: &str, records: &HashMap<u32, Record>) {
+    let Ok(entries) = fs::read_dir(seen_dir(session_name)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(pane_id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Some(record) = records.get(&pane_id) else {
+            let _ = fs::remove_file(entry.path());
+            continue;
+        };
+        if !is_done_seen(session_name, pane_id, *record) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The most urgent status recorded anywhere in a session, if any.
+///
+/// Used for the cross-session summary, where per-pane detail is not wanted
+/// and sibling sessions' panes are not knowable from here anyway.
+pub fn session_status(session_name: &str) -> Option<Status> {
+    read_session(session_name).into_values().reduce(merge)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_well_formed_record() {
+        assert_eq!(
+            parse_record("working 1000 jetski\n", Some(1000)),
+            Some(Record {
+                status: Status::Working,
+                written_at: Some(1000)
+            })
+        );
+    }
+
+    #[test]
+    fn parses_idle_unknown_and_unrecognized_statuses() {
+        assert_eq!(
+            parse_record("idle 1000 jetski", Some(1000)).map(|record| record.status),
+            Some(Status::Idle)
+        );
+        assert_eq!(
+            parse_record("unknown 1000 jetski", Some(1000)).map(|record| record.status),
+            Some(Status::Unknown)
+        );
+        assert_eq!(
+            parse_record("banana 1000 jetski", Some(1000)).map(|record| record.status),
+            Some(Status::Unknown)
+        );
+        assert_eq!(parse_record("", Some(1000)), None);
+    }
+
+    #[test]
+    fn expires_records_past_the_backstop() {
+        let written = 1_000_000;
+        let record = format!("working {} jetski", written);
+
+        assert_eq!(
+            parse_record(&record, Some(written + STALE_AFTER_SECS)).map(|record| record.status),
+            Some(Status::Working)
+        );
+        assert_eq!(
+            parse_record(&record, Some(written + STALE_AFTER_SECS + 1)),
+            None
+        );
+    }
+
+    #[test]
+    fn keeps_records_when_no_clock_is_available() {
+        assert_eq!(
+            parse_record("working 1 jetski", None).map(|record| record.status),
+            Some(Status::Working)
+        );
+    }
+
+    #[test]
+    fn tolerates_a_missing_timestamp() {
+        assert_eq!(
+            parse_record("done", Some(1000)).map(|record| record.status),
+            Some(Status::Done)
+        );
+    }
+
+    #[test]
+    fn merge_prefers_the_most_urgent() {
+        assert_eq!(merge(Status::Done, Status::Working), Status::Done);
+        assert_eq!(merge(Status::Working, Status::Done), Status::Done);
+        assert_eq!(merge(Status::Working, Status::Error), Status::Error);
+        assert_eq!(merge(Status::Blocked, Status::Error), Status::Blocked);
+        assert_eq!(merge(Status::Unknown, Status::Idle), Status::Unknown);
+    }
+}

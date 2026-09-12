@@ -1,0 +1,18 @@
+[package]
+name = "zellij-agent-tab-bar"
+version = "0.1.0"
+edition = "2021"
+
+# src/{line,tab}.rs and the bulk of src/main.rs are vendored verbatim from
+# zellij-org/zellij v0.45.1 default-plugins/tab-bar. Local changes are confined
+# to main.rs and marked; keeping them small is what makes re-vendoring on a
+# zellij upgrade cheap. Upstream builds this inside the zellij workspace
+# against path dependencies; here the zellij crates come from crates.io at the
+# matching version.
+
+[dependencies]
+agent-status-core = { workspace = true }
+ansi_term = { workspace = true }
+unicode-width = { workspace = true }
+zellij-tile = { workspace = true }
+zellij-tile-utils = { workspace = true }
