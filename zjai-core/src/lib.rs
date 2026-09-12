@@ -283,12 +283,23 @@ pub fn fold_tab_statuses(
     folded
 }
 
-/// The most urgent status recorded anywhere in a session, if any.
+/// The most urgent renderable status recorded anywhere in a session, if any.
 ///
 /// Used for the cross-session summary, where per-pane detail is not wanted
-/// and sibling sessions' panes are not knowable from here anyway.
+/// and sibling sessions' panes are not knowable from here anyway. Seen `Done`
+/// records render as `Idle`, so a session does not jump back to done after the
+/// user switches away from it.
 pub fn session_status(session_name: &str) -> Option<Status> {
-    read_session(session_name).into_values().reduce(merge)
+    read_session_records(session_name)
+        .into_iter()
+        .map(|(pane_id, record)| {
+            if is_done_seen(session_name, pane_id, record) {
+                Status::Idle
+            } else {
+                record.status
+            }
+        })
+        .reduce(merge)
 }
 
 #[cfg(test)]
@@ -367,6 +378,12 @@ mod tests {
         format!("zjai-test-{}-{}", name, std::process::id())
     }
 
+    fn write_test_record(session_name: &str, pane_id: u32, contents: &str) {
+        let dir = session_dir(session_name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(pane_id.to_string()), contents).unwrap();
+    }
+
     #[test]
     fn folds_pane_records_by_tab_and_urgency() {
         let session = test_session("folds");
@@ -427,6 +444,21 @@ mod tests {
 
         assert_eq!(tabs.get(&0), Some(&Status::Idle));
         assert_eq!(tabs.get(&1), Some(&Status::Done));
+        let _ = fs::remove_dir_all(session_dir(&session));
+    }
+
+    #[test]
+    fn session_status_renders_seen_done_records_as_idle() {
+        let session = test_session("session-seen-done");
+        let _ = fs::remove_dir_all(session_dir(&session));
+        let written_at = now_secs().unwrap_or(1000);
+        write_test_record(&session, 1, &format!("done {written_at} pi"));
+
+        assert_eq!(session_status(&session), Some(Status::Done));
+
+        mark_done_seen(&session, 1, Some(written_at));
+
+        assert_eq!(session_status(&session), Some(Status::Idle));
         let _ = fs::remove_dir_all(session_dir(&session));
     }
 }
