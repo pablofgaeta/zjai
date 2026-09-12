@@ -5,9 +5,9 @@
         "matcher": "startup",
         "hooks": [
           {
-            "name": "agent-status-session-start",
+            "name": "zjai-session-start",
             "type": "command",
-            "command": "$HOME/.local/libexec/agent-status-notify gemini idle"
+            "command": "$HOME/.local/libexec/zjai-notify gemini idle"
           }
         ]
       }
@@ -17,9 +17,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "name": "agent-status-before-agent",
+            "name": "zjai-before-agent",
             "type": "command",
-            "command": "$HOME/.local/libexec/agent-status-notify gemini working"
+            "command": "$HOME/.local/libexec/zjai-notify gemini working"
           }
         ]
       }
@@ -29,9 +29,9 @@
         "matcher": "ToolPermission",
         "hooks": [
           {
-            "name": "agent-status-blocked",
+            "name": "zjai-blocked",
             "type": "command",
-            "command": "$HOME/.local/libexec/agent-status-notify gemini blocked"
+            "command": "$HOME/.local/libexec/zjai-notify gemini blocked"
           }
         ]
       }
@@ -41,9 +41,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "name": "agent-status-after-tool",
+            "name": "zjai-after-tool",
             "type": "command",
-            "command": "$HOME/.local/libexec/agent-status-notify gemini working"
+            "command": "$HOME/.local/libexec/zjai-notify gemini working"
           }
         ]
       }
@@ -53,9 +53,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "name": "agent-status-after-agent",
+            "name": "zjai-after-agent",
             "type": "command",
-            "command": "$HOME/.local/libexec/agent-status-notify gemini done"
+            "command": "$HOME/.local/libexec/zjai-notify gemini done"
           }
         ]
       }
@@ -65,9 +65,9 @@
         "matcher": "exit",
         "hooks": [
           {
-            "name": "agent-status-session-end",
+            "name": "zjai-session-end",
             "type": "command",
-            "command": "$HOME/.local/libexec/agent-status-notify gemini idle"
+            "command": "$HOME/.local/libexec/zjai-notify gemini idle"
           }
         ]
       }

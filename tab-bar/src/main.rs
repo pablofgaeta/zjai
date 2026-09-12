@@ -10,8 +10,8 @@ use zellij_tile::prelude::*;
 
 use crate::line::tab_line;
 use crate::tab::tab_style;
-use agent_status_core as status;
-use agent_status_core::{Record, Status};
+use zjai_core as status;
+use zjai_core::{Record, Status};
 
 #[derive(Debug, Default)]
 pub struct LinePart {
@@ -51,10 +51,10 @@ struct State {
     hovered_tab_idx: Option<usize>,
     hovered_new_tab_button: bool,
     hint_text: Option<BTreeMap<usize, StyledText>>,
-    /// Agent status per tab position, folded from the per-pane records on
+    /// Zjai per tab position, folded from the per-pane records on
     /// disk after locally seen `Done` records are treated as `Idle`.
-    agent_status: HashMap<usize, Status>,
-    /// Raw agent status per terminal pane id, read from disk.
+    zjai_status: HashMap<usize, Status>,
+    /// Raw zjai per terminal pane id, read from disk.
     pane_status: HashMap<u32, Record>,
     /// Terminal pane id -> tab position, needed to attribute a record to a tab.
     pane_tabs: HashMap<u32, usize>,
@@ -72,18 +72,18 @@ impl State {
     ///
     /// Returns whether the result changed, so a settled bar does not repaint
     /// on every poll.
-    fn refresh_agent_status(&mut self) -> bool {
+    fn refresh_zjai_status(&mut self) -> bool {
         let Some(session_name) = self.mode_info.session_name.as_deref() else {
             return false;
         };
 
-        let previous_status = self.agent_status.clone();
+        let previous_status = self.zjai_status.clone();
         self.pane_status = status::read_session_records(session_name);
         status::cleanup_seen(session_name, &self.pane_status);
         self.mark_active_tab_done_seen(session_name);
-        self.agent_status = self.fold_tab_statuses(session_name);
+        self.zjai_status = self.fold_tab_statuses(session_name);
 
-        previous_status != self.agent_status
+        previous_status != self.zjai_status
     }
 
     fn mark_active_tab_done_seen(&self, session_name: &str) {
@@ -127,7 +127,7 @@ impl State {
     }
 
     fn has_animated_status(&self) -> bool {
-        self.agent_status
+        self.zjai_status
             .values()
             .any(|status| status.is_animated())
     }
@@ -202,7 +202,7 @@ impl ZellijPlugin for State {
                     }
                     self.active_tab_idx = active_tab_idx;
                     self.tabs = tabs;
-                    if self.refresh_agent_status() {
+                    if self.refresh_zjai_status() {
                         should_render = true;
                     }
                 } else {
@@ -218,7 +218,7 @@ impl ZellijPlugin for State {
                         }
                     }
                 }
-                if self.refresh_agent_status() {
+                if self.refresh_zjai_status() {
                     should_render = true;
                 }
             }
@@ -255,7 +255,7 @@ impl ZellijPlugin for State {
                     }
                 }
 
-                if self.tick_count % STATUS_POLL_EVERY_TICKS == 0 && self.refresh_agent_status() {
+                if self.tick_count % STATUS_POLL_EVERY_TICKS == 0 && self.refresh_zjai_status() {
                     should_render = true;
                 }
 
@@ -362,7 +362,7 @@ impl ZellijPlugin for State {
             // Prepending it here also means the fitting logic in line.rs
             // measures the real width without needing to know about it.
             if !is_renaming {
-                if let Some(status) = self.agent_status.get(&t.position) {
+                if let Some(status) = self.zjai_status.get(&t.position) {
                     tabname = format!("{} {}", status.glyph(self.animation_frame), tabname);
                 }
             }

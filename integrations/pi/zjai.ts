@@ -1,6 +1,6 @@
-// pi -> agent-status bridge.
+// pi -> zjai bridge.
 //
-// Status is recorded on disk by agent-status-notify, which the zellij plugins
+// Status is recorded on disk by zjai-notify, which the zellij plugins
 // poll. Delegating to that script keeps the record format and its location
 // defined in exactly one place, and costs no zellij IPC: the old `zellij pipe`
 // call blocked for a full second per event whenever no plugin unblocked the
@@ -9,14 +9,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn, spawnSync } from "node:child_process";
 
-type AgentStatus =
+type Zjai =
   "working" | "blocked" | "done" | "idle" | "unknown" | "error";
 
 const NOTIFY = process.env.HOME
-  ? `${process.env.HOME}/.local/libexec/agent-status-notify`
+  ? `${process.env.HOME}/.local/libexec/zjai-notify`
   : null;
 
-function args(status: AgentStatus): [string, string[]] | null {
+function args(status: Zjai): [string, string[]] | null {
   if (
     !NOTIFY ||
     !process.env.ZELLIJ_PANE_ID ||
@@ -27,7 +27,7 @@ function args(status: AgentStatus): [string, string[]] | null {
   return [NOTIFY, ["pi", status]];
 }
 
-function notify(status: AgentStatus) {
+function notify(status: Zjai) {
   const argv = args(status);
   if (!argv) return;
   try {
@@ -39,7 +39,7 @@ function notify(status: AgentStatus) {
 
 // Exit needs the synchronous form: a detached child is not guaranteed to run
 // before the process goes away.
-function notifyOnExit(status: AgentStatus) {
+function notifyOnExit(status: Zjai) {
   const argv = args(status);
   if (!argv) return;
   try {
@@ -53,7 +53,7 @@ export default function (pi: ExtensionAPI) {
   let activeAgentRuns = 0;
   let activePrompts = 0;
 
-  function notifyAgentState(status: AgentStatus) {
+  function notifyAgentState(status: Zjai) {
     if (activePrompts > 0 && status === "working") {
       notify("blocked");
       return;

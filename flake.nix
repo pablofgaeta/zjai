@@ -1,5 +1,5 @@
 {
-  description = "Cross-agent status: zellij wasm plugins + AI CLI integrations.";
+  description = "Cross-zjai: zellij wasm plugins + AI CLI integrations.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -15,16 +15,23 @@
     systems = ["aarch64-darwin" "x86_64-linux"];
     forEachSystem = nixpkgs.lib.genAttrs systems;
 
-    mkPlugins = system: let
+    mkWasmEnv = system: let
       pkgs = nixpkgs.legacyPackages.${system};
       wasmPkgs = pkgs.pkgsCross.wasm32-wasip1;
+    in {
+      inherit pkgs wasmPkgs;
 
-      # crane needs one toolchain derivation exposing both cargo and rustc;
-      # nixpkgs keeps them separate on the cross package set.
+      # crane and dev shells need one toolchain derivation exposing both cargo
+      # and rustc; nixpkgs keeps them separate on the cross package set.
       toolchain = pkgs.symlinkJoin {
         name = "wasm32-wasip1-rust-toolchain";
         paths = [wasmPkgs.rustPlatform.rust.rustc wasmPkgs.rustPlatform.rust.cargo];
       };
+    };
+
+    mkPlugins = system: let
+      env = mkWasmEnv system;
+      inherit (env) pkgs wasmPkgs toolchain;
 
       craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
 
@@ -51,11 +58,22 @@
             cargoExtraArgs = "-p ${pname}";
           });
     in {
-      status-bar = buildPlugin "zellij-agent-status";
-      tab-bar = buildPlugin "zellij-agent-tab-bar";
+      status-bar = buildPlugin "zjai-status";
+      tab-bar = buildPlugin "zjai-tab-bar";
     };
+    mkDevShell = system: let
+      env = mkWasmEnv system;
+      inherit (env) pkgs wasmPkgs toolchain;
+    in
+      pkgs.mkShell {
+        packages = [toolchain wasmPkgs.lld];
+        CARGO_BUILD_TARGET = "wasm32-wasip1";
+        RUSTFLAGS = "-C linker=wasm-ld";
+      };
   in {
     packages = forEachSystem mkPlugins;
+    checks = forEachSystem (system: self.packages.${system});
+    devShells = forEachSystem (system: {default = mkDevShell system;});
 
     homeManagerModules.default = import ./module.nix {inherit self;};
   };

@@ -1,5 +1,5 @@
 {
-  "name": "agent-status",
+  "name": "zjai",
   "version": "1.0.0",
-  "description": "Bridge Gemini CLI agent status to Zellij status bar"
+  "description": "Bridge Gemini CLI zjai to Zellij status bar"
 }

@@ -1,4 +1,4 @@
-//! Cross-session agent status summary for the bottom bar.
+//! Cross-session zjai summary for the bottom bar.
 //!
 //! This plugin only reads. It renders a line into its own pane and does
 //! nothing else: it never renames a tab, never writes a status record, and
@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use agent_status_core::{self as status, session_status, Record, Status};
+use zjai_core::{self as status, session_status, Record, Status};
 use zellij_tile::prelude::*;
 
 /// Drives the spinner, and by extension every other timed behaviour here:
@@ -100,7 +100,7 @@ impl ZellijPlugin for State {
         if self.permissions_granted {
             print!("{}", self.summary(cols));
         } else {
-            print!("agent status: waiting for permission");
+            print!("zjai: waiting for permission");
         }
     }
 }

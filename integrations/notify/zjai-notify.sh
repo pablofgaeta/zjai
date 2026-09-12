@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Records agent status for the zellij agent-status plugins.
+# Records zjai for the zellij zjai plugins.
 #
-# Usage: agent-status-notify <source> <status> [decision]
+# Usage: zjai-notify <source> <status> [decision]
 #   source: short producer name, e.g. "jetski" (recorded for debugging)
 #   status: working | blocked | done | idle | unknown | error
 #
@@ -15,15 +15,15 @@
 # ZELLIJ_TMP_DIR, defined in zellij-utils/src/consts.rs as
 # temp_dir()/zellij-<uid>, so this is the one path both sides can name:
 #
-#   host:  ${TMPDIR:-/tmp}/zellij-<uid>/agent-status/<session>/<pane_id>
-#   guest: /tmp/agent-status/<session>/<pane_id>
+#   host:  ${TMPDIR:-/tmp}/zellij-<uid>/zjai/<session>/<pane_id>
+#   guest: /tmp/zjai/<session>/<pane_id>
 #
 # Contents: "<status> <epoch_seconds> <source>".
 # `idle` removes the file; a missing file means "idle/no supported agent here".
 set -euo pipefail
 
-source_name="${1:?usage: agent-status-notify <source> <status> [decision]}"
-status="${2:?usage: agent-status-notify <source> <status> [decision]}"
+source_name="${1:?usage: zjai-notify <source> <status> [decision]}"
+status="${2:?usage: zjai-notify <source> <status> [decision]}"
 decision="${3:-}"
 
 # Emit valid JSON on stdout first, so hook runners (Jetski, Gemini CLI,
@@ -38,7 +38,7 @@ fi
 [ -n "${ZELLIJ_SESSION_NAME:-}" ] || exit 0
 
 zellij_tmp="${TMPDIR:-/tmp}/zellij-$(id -u)"
-state_dir="${zellij_tmp}/agent-status/${ZELLIJ_SESSION_NAME}"
+state_dir="${zellij_tmp}/zjai/${ZELLIJ_SESSION_NAME}"
 pane_id="${ZELLIJ_PANE_ID#terminal_}"
 target="${state_dir}/${pane_id}"
 

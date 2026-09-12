@@ -1,13 +1,13 @@
-//! The on-disk agent status record format, shared by both plugins.
+//! The on-disk zjai record format, shared by both plugins.
 //!
-//! Records are written by `agent-status-notify`.
+//! Records are written by `zjai-notify`.
 //!
 //! Zellij preopens exactly four directories for a plugin: `/host`, `/data`,
 //! `/cache` and `/tmp` (zellij-server/src/plugins/plugin_loader.rs). `$HOME`
 //! is therefore unreachable from inside the wasm guest, so the records live
 //! under `/tmp`, which the host exposes as `ZELLIJ_TMP_DIR`
 //! (`temp_dir()/zellij-<uid>`). The writer resolves that same directory from
-//! the host side; see `agent-status-notify`.
+//! the host side; see `zjai-notify`.
 //!
 //! One file per pane, named for the pane id, containing:
 //!
@@ -25,7 +25,7 @@ pub const WORKING_FRAMES: &[&str] = &[
 ];
 pub const BLOCKED_FRAMES: &[&str] = &["■", "■", "■", "□", "□", "□"];
 
-const STATUS_ROOT: &str = "/tmp/agent-status";
+const STATUS_ROOT: &str = "/tmp/zjai";
 const SEEN_DIR: &str = ".seen";
 
 /// Backstop for an agent that died without clearing its record. Deliberately

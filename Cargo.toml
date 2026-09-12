@@ -1,15 +1,15 @@
-# Workspace for the two zellij plugins that surface agent status.
+# Workspace for the two zellij plugins that surface zjai.
 #
-# They share `agent-status-core`, which owns the on-disk record format. Both
+# They share `zjai-core`, which owns the on-disk record format. Both
 # plugins are pure readers of that format: neither writes status anywhere and
 # neither mutates zellij state, which is what lets zellij run one copy of each
 # per tab without the copies needing to coordinate.
 [workspace]
 resolver = "2"
-members = ["agent-status-core", "status-bar", "tab-bar"]
+members = ["zjai-core", "status-bar", "tab-bar"]
 
 [workspace.dependencies]
-agent-status-core = { path = "agent-status-core" }
+zjai-core = { path = "zjai-core" }
 ansi_term = { version = "0.12.1", default-features = false }
 unicode-width = { version = "0.2.2", default-features = false }
 # Pinned to the zellij binary from nixpkgs. The tab-bar sources are vendored

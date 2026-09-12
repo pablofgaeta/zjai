@@ -1,5 +1,5 @@
 [package]
-name = "zellij-agent-tab-bar"
+name = "zjai-tab-bar"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,7 +11,7 @@ edition = "2021"
 # matching version.
 
 [dependencies]
-agent-status-core = { workspace = true }
+zjai-core = { workspace = true }
 ansi_term = { workspace = true }
 unicode-width = { workspace = true }
 zellij-tile = { workspace = true }

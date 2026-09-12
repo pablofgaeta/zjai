@@ -1,13 +1,13 @@
-// opencode -> agent-status bridge.
+// opencode -> zjai bridge.
 //
-// Status is recorded on disk by agent-status-notify, which the zellij
+// Status is recorded on disk by zjai-notify, which the zellij
 // plugins poll. Delegating to that script keeps the record format and its
 // location defined in exactly one place, and costs no zellij IPC: the old
 // `zellij pipe` call blocked for a full second per event whenever no plugin
 // unblocked the pipe.
 
 const NOTIFY = process.env.HOME
-  ? `${process.env.HOME}/.local/libexec/agent-status-notify`
+  ? `${process.env.HOME}/.local/libexec/zjai-notify`
   : null;
 
 function args(status) {
@@ -41,7 +41,7 @@ function notifyOnExit(status) {
 
 process.on("exit", () => notifyOnExit("idle"));
 
-export const AgentStatusPlugin = async () => ({
+export const ZjaiPlugin = async () => ({
   "chat.message": async () => notify("working"),
   "tool.execute.before": async () => notify("working"),
   "tool.execute.after": async () => notify("working"),
@@ -70,4 +70,4 @@ export const AgentStatusPlugin = async () => ({
   },
 });
 
-export default AgentStatusPlugin;
+export default ZjaiPlugin;
