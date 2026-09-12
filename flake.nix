@@ -56,5 +56,7 @@
     };
   in {
     packages = forEachSystem mkPlugins;
+
+    homeManagerModules.default = import ./module.nix {inherit self;};
   };
 }
