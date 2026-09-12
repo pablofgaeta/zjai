@@ -5,12 +5,12 @@
   ...
 }: let
   cfg = config.programs.zjai;
-  plugins = self.packages.${pkgs.system};
+  plugins = self.packages.${pkgs.stdenv.hostPlatform.system};
   pluginDir = "${config.home.homeDirectory}/.config/zellij/plugins";
 
   pluginConfig = lib.concatStringsSep "\n" (lib.filter (line: line != "") [
-    (lib.optionalString cfg.plugins.tabBar ''        tab-bar location="file:${pluginDir}/zjai_tab_bar.wasm"'')
-    (lib.optionalString cfg.plugins.statusBar ''        status-bar location="file:${pluginDir}/zjai_status.wasm"'')
+    (lib.optionalString cfg.plugins.tabBar "        tab-bar location=\"file:${pluginDir}/zjai_tab_bar.wasm\"")
+    (lib.optionalString cfg.plugins.statusBar "        status-bar location=\"file:${pluginDir}/zjai_status.wasm\"")
   ]);
 
   needsNotify = cfg.integrations.pi || cfg.integrations.opencode || cfg.integrations.gemini;

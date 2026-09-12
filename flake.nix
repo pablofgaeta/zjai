@@ -36,6 +36,8 @@
       craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
 
       commonArgs = {
+        pname = "zjai";
+        version = "0.1.0";
         src = craneLib.cleanCargoSource ./.;
         strictDeps = true;
         doCheck = false;
