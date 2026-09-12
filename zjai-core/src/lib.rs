@@ -7,6 +7,9 @@
 //! Records are written by protocol producers such as `zjai-notify`. Zellij
 //! wasm plugins read them from `/tmp/zjai/<session>/<pane_id>`, which maps to
 //! `${TMPDIR:-/tmp}/zellij-<uid>/zjai/<session>/<pane_id>` on the host.
+//!
+//! Third-party UI plugins usually start with [`read_session_records`],
+//! [`read_tab_statuses`], or [`session_status`].
 
 use std::collections::HashMap;
 use std::fs;

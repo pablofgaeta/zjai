@@ -105,3 +105,5 @@ This repository includes:
 - `integrations/notify/zjai-notify.sh`: shell writer for hook-based agents.
 - `status-bar`: reference cross-session UI plugin.
 - `tab-bar`: reference per-tab UI plugin.
+
+See `ui-plugin-integration.md` for the reader interface third-party Zellij UI plugins should use.
