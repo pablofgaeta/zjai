@@ -1,0 +1,5 @@
+{
+  "name": "agent-status",
+  "version": "1.0.0",
+  "description": "Bridge Gemini CLI agent status to Zellij status bar"
+}

@@ -1,0 +1,76 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "name": "agent-status-session-start",
+            "type": "command",
+            "command": "$HOME/.local/libexec/agent-status-notify gemini idle"
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "agent-status-before-agent",
+            "type": "command",
+            "command": "$HOME/.local/libexec/agent-status-notify gemini working"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "ToolPermission",
+        "hooks": [
+          {
+            "name": "agent-status-blocked",
+            "type": "command",
+            "command": "$HOME/.local/libexec/agent-status-notify gemini blocked"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "agent-status-after-tool",
+            "type": "command",
+            "command": "$HOME/.local/libexec/agent-status-notify gemini working"
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "agent-status-after-agent",
+            "type": "command",
+            "command": "$HOME/.local/libexec/agent-status-notify gemini done"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "exit",
+        "hooks": [
+          {
+            "name": "agent-status-session-end",
+            "type": "command",
+            "command": "$HOME/.local/libexec/agent-status-notify gemini idle"
+          }
+        ]
+      }
+    ]
+  }
+}
