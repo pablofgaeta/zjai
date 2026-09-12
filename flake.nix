@@ -72,9 +72,71 @@
         CARGO_BUILD_TARGET = "wasm32-wasip1";
         RUSTFLAGS = "-C linker=wasm-ld";
       };
+
+    mkModuleCheck = system: let
+      pkgs = nixpkgs.legacyPackages.${system};
+      inherit (pkgs) lib;
+      module = import ./module.nix {inherit self;};
+      evalZjai = userModule:
+        (lib.evalModules {
+          modules = [
+            {
+              options = {
+                home.homeDirectory = lib.mkOption {
+                  type = lib.types.str;
+                  default = "/home/test";
+                };
+                home.file = lib.mkOption {
+                  type = lib.types.attrs;
+                  default = {};
+                };
+                programs.zellij.extraConfig = lib.mkOption {
+                  type = lib.types.lines;
+                  default = "";
+                };
+              };
+            }
+            module
+            userModule
+          ];
+        })
+        .config;
+      hasFile = file: config: builtins.hasAttr file config.home.file;
+      defaultConfig = evalZjai {};
+      noStatusBar = evalZjai {programs.zjai.plugins.statusBar = false;};
+      noTabBar = evalZjai {programs.zjai.plugins.tabBar = false;};
+      noIntegrations = evalZjai {
+        programs.zjai.integrations = {
+          pi = false;
+          opencode = false;
+          gemini = false;
+        };
+      };
+      disabled = evalZjai {programs.zjai.enable = false;};
+      checked =
+        assert hasFile ".config/zellij/plugins/zjai_status.wasm" defaultConfig;
+        assert hasFile ".config/zellij/plugins/zjai_tab_bar.wasm" defaultConfig;
+        assert hasFile ".pi/agent/extensions/zjai.ts" defaultConfig;
+        assert hasFile ".config/opencode/plugins/zjai.js" defaultConfig;
+        assert hasFile ".gemini/extensions/zjai/gemini-extension.json" defaultConfig;
+        assert hasFile ".local/libexec/zjai-notify" defaultConfig;
+        assert !(hasFile ".config/zellij/plugins/zjai_status.wasm" noStatusBar);
+        assert hasFile ".config/zellij/plugins/zjai_tab_bar.wasm" noStatusBar;
+        assert hasFile ".config/zellij/plugins/zjai_status.wasm" noTabBar;
+        assert !(hasFile ".config/zellij/plugins/zjai_tab_bar.wasm" noTabBar);
+        assert !(hasFile ".pi/agent/extensions/zjai.ts" noIntegrations);
+        assert !(hasFile ".config/opencode/plugins/zjai.js" noIntegrations);
+        assert !(hasFile ".gemini/extensions/zjai/gemini-extension.json" noIntegrations);
+        assert !(hasFile ".local/libexec/zjai-notify" noIntegrations);
+        assert disabled.home.file == {};
+        true;
+    in
+      pkgs.runCommand "zjai-home-manager-module-check" {} ''
+        ${lib.optionalString checked "echo ok > $out"}
+      '';
   in {
     packages = forEachSystem mkPlugins;
-    checks = forEachSystem (system: self.packages.${system});
+    checks = forEachSystem (system: self.packages.${system} // {home-manager-module = mkModuleCheck system;});
     devShells = forEachSystem (system: {default = mkDevShell system;});
 
     homeManagerModules.default = import ./module.nix {inherit self;};
