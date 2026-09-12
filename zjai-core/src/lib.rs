@@ -13,9 +13,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const WORKING_FRAMES: &[&str] = &[
-    "✢", "✢", "✻", "✻", "✽", "✽", "✶", "✶", "✽", "✽", "✻", "✻",
-];
+pub const WORKING_FRAMES: &[&str] = &["✢", "✢", "✻", "✻", "✽", "✽", "✶", "✶", "✽", "✽", "✻", "✻"];
 pub const BLOCKED_FRAMES: &[&str] = &["■", "■", "■", "□", "□", "□"];
 
 const STATUS_ROOT: &str = "/tmp/zjai";
@@ -41,6 +39,14 @@ pub enum Status {
 pub struct Record {
     pub status: Status,
     pub written_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TabStatuses {
+    /// Raw protocol records keyed by terminal pane id.
+    pub records: HashMap<u32, Record>,
+    /// Renderable status keyed by Zellij tab position.
+    pub tabs: HashMap<usize, Status>,
 }
 
 impl Status {
@@ -217,6 +223,63 @@ pub fn cleanup_seen(session_name: &str, records: &HashMap<u32, Record>) {
     }
 }
 
+/// Reads records and folds them into renderable tab statuses.
+///
+/// A `Done` record in the active tab is marked as seen before folding, so it
+/// renders once and then drops back to `Idle`. Records for unknown panes are
+/// ignored because only the UI plugin can map panes to tab positions.
+pub fn read_tab_statuses(
+    session_name: &str,
+    active_tab_position: Option<usize>,
+    pane_tabs: &HashMap<u32, usize>,
+) -> TabStatuses {
+    let records = read_session_records(session_name);
+    cleanup_seen(session_name, &records);
+    if let Some(active_tab_position) = active_tab_position {
+        mark_tab_done_seen(session_name, active_tab_position, &records, pane_tabs);
+    }
+    let tabs = fold_tab_statuses(session_name, &records, pane_tabs);
+    TabStatuses { records, tabs }
+}
+
+/// Records that all currently done panes in a tab have been seen.
+pub fn mark_tab_done_seen(
+    session_name: &str,
+    tab_position: usize,
+    records: &HashMap<u32, Record>,
+    pane_tabs: &HashMap<u32, usize>,
+) {
+    for (&pane_id, &record) in records {
+        if record.status == Status::Done && pane_tabs.get(&pane_id) == Some(&tab_position) {
+            mark_done_seen(session_name, pane_id, record.written_at);
+        }
+    }
+}
+
+/// Folds per-pane records into the most urgent renderable status per tab.
+pub fn fold_tab_statuses(
+    session_name: &str,
+    records: &HashMap<u32, Record>,
+    pane_tabs: &HashMap<u32, usize>,
+) -> HashMap<usize, Status> {
+    let mut folded: HashMap<usize, Status> = HashMap::new();
+    for (&pane_id, &record) in records {
+        let Some(&tab_position) = pane_tabs.get(&pane_id) else {
+            continue;
+        };
+        let rendered_status = if is_done_seen(session_name, pane_id, record) {
+            Status::Idle
+        } else {
+            record.status
+        };
+        folded
+            .entry(tab_position)
+            .and_modify(|existing| *existing = merge(*existing, rendered_status))
+            .or_insert(rendered_status);
+    }
+    folded
+}
+
 /// The most urgent status recorded anywhere in a session, if any.
 ///
 /// Used for the cross-session summary, where per-pane detail is not wanted
@@ -295,5 +358,72 @@ mod tests {
         assert_eq!(merge(Status::Working, Status::Error), Status::Error);
         assert_eq!(merge(Status::Blocked, Status::Error), Status::Blocked);
         assert_eq!(merge(Status::Unknown, Status::Idle), Status::Unknown);
+    }
+
+    fn test_session(name: &str) -> String {
+        format!("zjai-test-{}-{}", name, std::process::id())
+    }
+
+    #[test]
+    fn folds_pane_records_by_tab_and_urgency() {
+        let session = test_session("folds");
+        let mut records = HashMap::new();
+        records.insert(
+            1,
+            Record {
+                status: Status::Working,
+                written_at: Some(1000),
+            },
+        );
+        records.insert(
+            2,
+            Record {
+                status: Status::Blocked,
+                written_at: Some(1000),
+            },
+        );
+        records.insert(
+            3,
+            Record {
+                status: Status::Error,
+                written_at: Some(1000),
+            },
+        );
+        let pane_tabs = HashMap::from([(1, 0), (2, 0), (3, 1)]);
+
+        assert_eq!(
+            fold_tab_statuses(&session, &records, &pane_tabs),
+            HashMap::from([(0, Status::Blocked), (1, Status::Error)])
+        );
+    }
+
+    #[test]
+    fn marks_active_tab_done_records_as_seen_before_folding() {
+        let session = test_session("done-seen");
+        let _ = fs::remove_dir_all(session_dir(&session));
+        let records = HashMap::from([
+            (
+                1,
+                Record {
+                    status: Status::Done,
+                    written_at: Some(1000),
+                },
+            ),
+            (
+                2,
+                Record {
+                    status: Status::Done,
+                    written_at: Some(2000),
+                },
+            ),
+        ]);
+        let pane_tabs = HashMap::from([(1, 0), (2, 1)]);
+
+        mark_tab_done_seen(&session, 0, &records, &pane_tabs);
+        let tabs = fold_tab_statuses(&session, &records, &pane_tabs);
+
+        assert_eq!(tabs.get(&0), Some(&Status::Idle));
+        assert_eq!(tabs.get(&1), Some(&Status::Done));
+        let _ = fs::remove_dir_all(session_dir(&session));
     }
 }

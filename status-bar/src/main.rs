@@ -9,8 +9,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use zjai_core::{self as status, session_status, Record, Status};
 use zellij_tile::prelude::*;
+use zjai_core::{self as status, session_status, Status};
 
 /// Drives the spinner, and by extension every other timed behaviour here:
 /// `Event::Timer` carries no identity, so two timers in flight cannot be told
@@ -32,7 +32,7 @@ struct State {
     statuses: BTreeMap<String, Status>,
     permissions_granted: bool,
     tabs: Vec<TabInfo>,
-    pane_status: HashMap<u32, Record>,
+    pane_status: HashMap<u32, status::Record>,
     pane_tabs: HashMap<u32, usize>,
     animation_frame: usize,
     tick_count: u64,
@@ -141,19 +141,24 @@ impl State {
             .iter()
             .find(|session| session.is_current_session)
             .map(|session| session.name.clone());
-        if let Some(session_name) = &current_session_name {
-            self.pane_status = status::read_session_records(session_name);
-            status::cleanup_seen(session_name, &self.pane_status);
-            self.mark_active_tab_done_seen(session_name);
-        }
+        let current_status = current_session_name.as_ref().and_then(|session_name| {
+            let active_tab_position = self
+                .tabs
+                .iter()
+                .find(|tab| tab.active)
+                .map(|tab| tab.position);
+            let status::TabStatuses { records, tabs } =
+                status::read_tab_statuses(session_name, active_tab_position, &self.pane_tabs);
+            self.pane_status = records;
+            tabs.into_values().reduce(status::merge)
+        });
 
         let next: BTreeMap<String, Status> = self
             .sessions
             .iter()
             .filter_map(|session| {
                 if Some(&session.name) == current_session_name.as_ref() {
-                    self.current_session_status(&session.name)
-                        .map(|status| (session.name.clone(), status))
+                    current_status.map(|status| (session.name.clone(), status))
                 } else {
                     session_status(&session.name).map(|status| (session.name.clone(), status))
                 }
@@ -163,41 +168,6 @@ impl State {
         let changed = next != self.statuses;
         self.statuses = next;
         changed
-    }
-
-    fn mark_active_tab_done_seen(&self, session_name: &str) {
-        let Some(active_tab_position) = self
-            .tabs
-            .iter()
-            .find(|tab| tab.active)
-            .map(|tab| tab.position)
-        else {
-            return;
-        };
-
-        for (&pane_id, &record) in &self.pane_status {
-            if record.status == Status::Done
-                && self.pane_tabs.get(&pane_id) == Some(&active_tab_position)
-            {
-                status::mark_done_seen(session_name, pane_id, record.written_at);
-            }
-        }
-    }
-
-    fn current_session_status(&self, session_name: &str) -> Option<Status> {
-        self.pane_status
-            .iter()
-            .filter_map(|(&pane_id, &record)| {
-                if !self.pane_tabs.contains_key(&pane_id) {
-                    return None;
-                }
-                if status::is_done_seen(session_name, pane_id, record) {
-                    Some(Status::Idle)
-                } else {
-                    Some(record.status)
-                }
-            })
-            .reduce(status::merge)
     }
 
     fn summary(&self, cols: usize) -> String {

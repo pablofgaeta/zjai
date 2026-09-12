@@ -11,7 +11,7 @@ use zellij_tile::prelude::*;
 use crate::line::tab_line;
 use crate::tab::tab_style;
 use zjai_core as status;
-use zjai_core::{Record, Status};
+use zjai_core::Status;
 
 #[derive(Debug, Default)]
 pub struct LinePart {
@@ -55,7 +55,7 @@ struct State {
     /// disk after locally seen `Done` records are treated as `Idle`.
     zjai_status: HashMap<usize, Status>,
     /// Raw zjai per terminal pane id, read from disk.
-    pane_status: HashMap<u32, Record>,
+    pane_status: HashMap<u32, status::Record>,
     /// Terminal pane id -> tab position, needed to attribute a record to a tab.
     pane_tabs: HashMap<u32, usize>,
     animation_frame: usize,
@@ -68,7 +68,7 @@ static ARROW_SEPARATOR: &str = "";
 register_plugin!(State);
 
 impl State {
-    /// Folds the per-pane records on disk into a status per tab.
+    /// Refreshes protocol records and folds them into a status per tab.
     ///
     /// Returns whether the result changed, so a settled bar does not repaint
     /// on every poll.
@@ -78,58 +78,21 @@ impl State {
         };
 
         let previous_status = self.zjai_status.clone();
-        self.pane_status = status::read_session_records(session_name);
-        status::cleanup_seen(session_name, &self.pane_status);
-        self.mark_active_tab_done_seen(session_name);
-        self.zjai_status = self.fold_tab_statuses(session_name);
+        let active_tab_position = self
+            .tabs
+            .iter()
+            .find(|tab| tab.active)
+            .map(|tab| tab.position);
+        let status::TabStatuses { records, tabs } =
+            status::read_tab_statuses(session_name, active_tab_position, &self.pane_tabs);
+        self.pane_status = records;
+        self.zjai_status = tabs;
 
         previous_status != self.zjai_status
     }
 
-    fn mark_active_tab_done_seen(&self, session_name: &str) {
-        let Some(active_tab_position) = self
-            .tabs
-            .iter()
-            .find(|tab| tab.active)
-            .map(|tab| tab.position)
-        else {
-            return;
-        };
-
-        for (&pane_id, &record) in &self.pane_status {
-            if record.status == Status::Done
-                && self.pane_tabs.get(&pane_id) == Some(&active_tab_position)
-            {
-                status::mark_done_seen(session_name, pane_id, record.written_at);
-            }
-        }
-    }
-
-    fn fold_tab_statuses(&self, session_name: &str) -> HashMap<usize, Status> {
-        let mut folded: HashMap<usize, Status> = HashMap::new();
-        for (&pane_id, &record) in &self.pane_status {
-            // A record naming a pane this bar has not seen yet is dropped
-            // rather than guessed at; it lands on the next PaneUpdate.
-            let Some(&tab_position) = self.pane_tabs.get(&pane_id) else {
-                continue;
-            };
-            let rendered_status = if status::is_done_seen(session_name, pane_id, record) {
-                Status::Idle
-            } else {
-                record.status
-            };
-            folded
-                .entry(tab_position)
-                .and_modify(|existing| *existing = status::merge(*existing, rendered_status))
-                .or_insert(rendered_status);
-        }
-        folded
-    }
-
     fn has_animated_status(&self) -> bool {
-        self.zjai_status
-            .values()
-            .any(|status| status.is_animated())
+        self.zjai_status.values().any(|status| status.is_animated())
     }
 }
 
