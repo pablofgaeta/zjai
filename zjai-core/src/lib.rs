@@ -1,19 +1,12 @@
-//! The on-disk zjai record format, shared by both plugins.
+//! Reader library for Zellij Agent State Protocol v1.
 //!
-//! Records are written by `zjai-notify`.
+//! The protocol is documented in `docs/protocol.md`. `zjai-core` is the small
+//! interface UI plugins depend on: it reads pane records, parses statuses,
+//! applies stale-record handling, and exposes merge/glyph helpers.
 //!
-//! Zellij preopens exactly four directories for a plugin: `/host`, `/data`,
-//! `/cache` and `/tmp` (zellij-server/src/plugins/plugin_loader.rs). `$HOME`
-//! is therefore unreachable from inside the wasm guest, so the records live
-//! under `/tmp`, which the host exposes as `ZELLIJ_TMP_DIR`
-//! (`temp_dir()/zellij-<uid>`). The writer resolves that same directory from
-//! the host side; see `zjai-notify`.
-//!
-//! One file per pane, named for the pane id, containing:
-//!
-//! ```text
-//! <status> <epoch_seconds> <source>
-//! ```
+//! Records are written by protocol producers such as `zjai-notify`. Zellij
+//! wasm plugins read them from `/tmp/zjai/<session>/<pane_id>`, which maps to
+//! `${TMPDIR:-/tmp}/zellij-<uid>/zjai/<session>/<pane_id>` on the host.
 
 use std::collections::HashMap;
 use std::fs;

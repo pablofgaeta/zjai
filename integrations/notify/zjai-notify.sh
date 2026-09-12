@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Records zjai for the zellij zjai plugins.
+# Writes Zellij Agent State Protocol v1 records.
 #
 # Usage: zjai-notify <source> <status> [decision]
 #   source: short producer name, e.g. "jetski" (recorded for debugging)
 #   status: working | blocked | done | idle | unknown | error
 #
 # State lives on disk, one file per pane, rather than being pushed into
-# zellij over a pipe. The plugins poll it, so this script needs neither
-# zellij nor a subprocess and cannot block the calling agent's hook.
+# zellij over a pipe or centralized in a database. UI plugins poll it, so this
+# script needs neither zellij nor a subprocess and cannot block the calling
+# agent's hook.
 #
 # The location is dictated by zellij's plugin sandbox. Plugins get exactly
 # four preopened directories -- /host, /data, /cache and /tmp -- so $HOME is
