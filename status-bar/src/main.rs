@@ -196,13 +196,10 @@ impl State {
     }
 
     fn summary(&mut self, cols: usize) -> String {
+        // Sorted by name only, so clicking a session to switch to it doesn't
+        // reorder the list out from under a repeated click.
         let mut sessions = self.sessions.clone();
-        sessions.sort_by(|left, right| {
-            right
-                .is_current_session
-                .cmp(&left.is_current_session)
-                .then_with(|| left.name.cmp(&right.name))
-        });
+        sessions.sort_by(|left, right| left.name.cmp(&right.name));
 
         self.session_ranges.clear();
         let mut summary = String::from("sessions:");
