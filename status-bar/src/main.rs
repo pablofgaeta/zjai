@@ -1,9 +1,11 @@
 //! Cross-session zjai summary for the bottom bar.
 //!
-//! This plugin only reads. It renders a line into its own pane and does
-//! nothing else: it never renames a tab, never writes a status record, and
-//! never parses its own output back in to recover state. Zellij runs one copy
-//! of it per tab; each copy keeps local seen-state for the active tab only.
+//! This plugin never renames a tab, never writes a status record, and never
+//! parses its own output back in to recover state. Zellij runs one copy of it
+//! per tab; each copy keeps local seen-state for the active tab only. The one
+//! state change it does make is switching sessions on click, which goes
+//! through Zellij's own `switch_session` host call rather than anything this
+//! plugin persists itself.
 //!
 //! Per-tab status is drawn by the sibling tab-bar plugin.
 
@@ -36,16 +38,23 @@ struct State {
     pane_tabs: HashMap<u32, usize>,
     animation_frame: usize,
     tick_count: u64,
+    /// Column ranges (start, end) of each rendered session name, in the same
+    /// order as the last `summary()` call, so a click column can be resolved
+    /// back to a session to switch to.
+    session_ranges: Vec<(usize, usize, String)>,
 }
 
 register_plugin!(State);
 
 impl ZellijPlugin for State {
     fn load(&mut self, _configuration: BTreeMap<String, String>) {
-        // Reading is all this plugin does. It no longer asks for
-        // ChangeApplicationState (it renamed tabs) or ReadCliPipes (status
-        // arrived over a pipe); both went away with the move to disk.
-        request_permission(&[PermissionType::ReadApplicationState]);
+        // ReadCliPipes went away with the move to status-on-disk.
+        // ChangeApplicationState is requested for one thing: switching
+        // sessions when a rendered session name is clicked.
+        request_permission(&[
+            PermissionType::ReadApplicationState,
+            PermissionType::ChangeApplicationState,
+        ]);
         subscribe(&[EventType::PermissionRequestResult, EventType::Timer]);
         // Bootstraps the heartbeat, which re-arms itself from its own handler.
         set_timeout(ANIMATION_INTERVAL_SECS);
@@ -61,6 +70,7 @@ impl ZellijPlugin for State {
                     EventType::TabUpdate,
                     EventType::PaneUpdate,
                     EventType::Timer,
+                    EventType::Mouse,
                 ]);
                 self.poll_sessions();
                 true
@@ -92,6 +102,7 @@ impl ZellijPlugin for State {
                 true
             }
             Event::Timer(_) => self.tick(),
+            Event::Mouse(Mouse::LeftClick(_, col)) => self.click(col),
             _ => false,
         }
     }
@@ -170,7 +181,21 @@ impl State {
         changed
     }
 
-    fn summary(&self, cols: usize) -> String {
+    /// Resolves a click column against the ranges recorded by the last
+    /// `summary()` call and switches to the session under it, mirroring how
+    /// the sibling tab-bar plugin maps a click column to a tab.
+    fn click(&mut self, col: usize) -> bool {
+        if let Some((_, _, name)) = self
+            .session_ranges
+            .iter()
+            .find(|(start, end, _)| col >= *start && col < *end)
+        {
+            switch_session(Some(name));
+        }
+        false
+    }
+
+    fn summary(&mut self, cols: usize) -> String {
         let mut sessions = self.sessions.clone();
         sessions.sort_by(|left, right| {
             right
@@ -179,6 +204,7 @@ impl State {
                 .then_with(|| left.name.cmp(&right.name))
         });
 
+        self.session_ranges.clear();
         let mut summary = String::from("sessions:");
         for session in &sessions {
             let glyph = self
@@ -191,7 +217,10 @@ impl State {
             if summary.chars().count() + item.chars().count() > cols {
                 break;
             }
+            let start = summary.chars().count();
             summary.push_str(&item);
+            let end = summary.chars().count();
+            self.session_ranges.push((start, end, session.name.clone()));
         }
         summary
     }
