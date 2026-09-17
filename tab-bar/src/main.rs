@@ -33,6 +33,10 @@ impl LinePart {
 /// the rest from a tick count.
 const ANIMATION_INTERVAL_SECS: f64 = 0.1;
 const STATUS_POLL_EVERY_TICKS: u64 = 3;
+/// Zellij only rescans sessions when a plugin calls `get_session_list()`, so
+/// poll it here to keep the attach state (see `viewing`) fresh even if a
+/// `SessionUpdate` event is missed.
+const SESSION_POLL_EVERY_TICKS: u64 = 20;
 /// Formerly a `set_timeout(5.0)` of its own, now expressed against the
 /// heartbeat so it cannot be consumed by an animation tick.
 const HINT_TIMEOUT_TICKS: u64 = 50;
@@ -61,6 +65,11 @@ struct State {
     animation_frame: usize,
     tick_count: u64,
     hint_expires_at_tick: Option<u64>,
+    /// Whether a client is attached to this session, i.e. the user is actually
+    /// viewing it. A detached session keeps running this plugin with its own
+    /// tab still "active", so marking `Done` seen while detached would clear a
+    /// finished agent the user never looked at. Only mark when viewing.
+    viewing: bool,
 }
 
 static ARROW_SEPARATOR: &str = "";
@@ -78,11 +87,16 @@ impl State {
         };
 
         let previous_status = self.zjai_status.clone();
-        let active_tab_position = self
-            .tabs
-            .iter()
-            .find(|tab| tab.active)
-            .map(|tab| tab.position);
+        // Passing `None` suppresses done-seen marking; only mark the active tab
+        // as seen when a client is attached (see `viewing`).
+        let active_tab_position = if self.viewing {
+            self.tabs
+                .iter()
+                .find(|tab| tab.active)
+                .map(|tab| tab.position)
+        } else {
+            None
+        };
         let status::TabStatuses { records, tabs } =
             status::read_tab_statuses(session_name, active_tab_position, &self.pane_tabs);
         self.pane_status = records;
@@ -93,6 +107,28 @@ impl State {
 
     fn has_animated_status(&self) -> bool {
         self.zjai_status.values().any(|status| status.is_animated())
+    }
+
+    /// Updates `viewing` from a session snapshot. Returns whether it changed.
+    fn update_viewing(&mut self, sessions: &[SessionInfo]) -> bool {
+        let viewing = sessions
+            .iter()
+            .find(|session| session.is_current_session)
+            .map(|session| session.connected_clients > 0 || session.web_client_count > 0)
+            .unwrap_or(false);
+        let changed = self.viewing != viewing;
+        self.viewing = viewing;
+        changed
+    }
+
+    /// Refreshes `viewing` by asking zellij to rescan sessions, since
+    /// `SessionUpdate` events for this session's own attach state are not
+    /// guaranteed to arrive on their own.
+    fn poll_sessions(&mut self) -> bool {
+        match get_session_list() {
+            Ok(snapshot) => self.update_viewing(&snapshot.live_sessions),
+            Err(_) => false,
+        }
     }
 }
 
@@ -112,6 +148,7 @@ impl ZellijPlugin for State {
             .unwrap_or(false);
         subscribe(&[
             EventType::PermissionRequestResult,
+            EventType::SessionUpdate,
             EventType::TabUpdate,
             EventType::PaneUpdate,
             EventType::ModeUpdate,
@@ -136,6 +173,13 @@ impl ZellijPlugin for State {
             Event::PermissionRequestResult(_) => {
                 set_selectable(false);
                 should_render = true;
+            }
+            Event::SessionUpdate(sessions, _) => {
+                // Attach/detach changes what may be marked done-seen, so
+                // re-fold if the viewing state flipped.
+                if self.update_viewing(&sessions) && self.refresh_zjai_status() {
+                    should_render = true;
+                }
             }
             Event::InitialKeybinds(keybinds) => {
                 self.cached_keybinds = keybinds;
@@ -216,6 +260,13 @@ impl ZellijPlugin for State {
                             should_render = true;
                         }
                     }
+                }
+
+                if self.tick_count % SESSION_POLL_EVERY_TICKS == 0
+                    && self.poll_sessions()
+                    && self.refresh_zjai_status()
+                {
+                    should_render = true;
                 }
 
                 if self.tick_count % STATUS_POLL_EVERY_TICKS == 0 && self.refresh_zjai_status() {

@@ -448,6 +448,27 @@ mod tests {
     }
 
     #[test]
+    fn does_not_mark_done_seen_when_session_is_not_viewed() {
+        // A session whose plugins are running but that no client is attached
+        // to passes `None` for the active tab: nothing is being viewed, so a
+        // `Done` record must survive as `Done` rather than being marked seen.
+        let session = test_session("no-view-no-mark");
+        let _ = fs::remove_dir_all(session_dir(&session));
+        let written_at = now_secs().unwrap_or(1000);
+        write_test_record(&session, 1, &format!("done {written_at} cloudcode"));
+        let pane_tabs = HashMap::from([(1u32, 0usize)]);
+
+        let TabStatuses { tabs, .. } = read_tab_statuses(&session, None, &pane_tabs);
+        assert_eq!(tabs.get(&0), Some(&Status::Done));
+
+        // Once the session is actually viewed (Some active tab), the same
+        // record is marked seen and folds to Idle.
+        let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(0), &pane_tabs);
+        assert_eq!(tabs.get(&0), Some(&Status::Idle));
+        let _ = fs::remove_dir_all(session_dir(&session));
+    }
+
+    #[test]
     fn session_status_renders_seen_done_records_as_idle() {
         let session = test_session("session-seen-done");
         let _ = fs::remove_dir_all(session_dir(&session));
