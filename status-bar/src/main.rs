@@ -147,26 +147,14 @@ impl State {
 
     /// Returns whether anything changed, so a settled bar does not repaint.
     fn refresh_statuses(&mut self) -> bool {
-        let current_session = self
+        let current_session_name = self
             .sessions
             .iter()
-            .find(|session| session.is_current_session);
-        let current_session_name = current_session.map(|session| session.name.clone());
-        // Only mark as done when a client is actually attached (viewing) this session.
-        let viewing_current = current_session
-            .map(|session| session.connected_clients > 0 || session.web_client_count > 0)
-            .unwrap_or(false);
+            .find(|session| session.is_current_session)
+            .map(|session| session.name.clone());
         let current_status = current_session_name.as_ref().and_then(|session_name| {
-            let active_tab_position = if viewing_current {
-                self.tabs
-                    .iter()
-                    .find(|tab| tab.active)
-                    .map(|tab| tab.position)
-            } else {
-                None
-            };
             let status::TabStatuses { records, tabs } =
-                status::read_tab_statuses(session_name, active_tab_position, &self.pane_tabs);
+                status::peek_tab_statuses(session_name, &self.pane_tabs);
             self.pane_status = records;
             tabs.into_values().reduce(status::merge)
         });

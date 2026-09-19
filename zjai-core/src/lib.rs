@@ -226,23 +226,40 @@ pub fn cleanup_seen(session_name: &str, records: &HashMap<u32, Record>) {
     }
 }
 
+/// Reads records and folds them into renderable tab statuses without marking
+/// `Done` records as seen.
+///
+/// This is for read-only UI surfaces such as a cross-session status summary.
+/// Records for unknown panes are ignored because only a UI plugin can map panes
+/// to tab positions.
+pub fn peek_tab_statuses(session_name: &str, pane_tabs: &HashMap<u32, usize>) -> TabStatuses {
+    let records = read_session_records(session_name);
+    cleanup_seen(session_name, &records);
+    let tabs = fold_tab_statuses(session_name, &records, pane_tabs);
+    TabStatuses { records, tabs }
+}
+
 /// Reads records and folds them into renderable tab statuses.
 ///
-/// A `Done` record in the active tab is marked as seen before folding, so it
-/// renders once and then drops back to `Idle`. Records for unknown panes are
-/// ignored because only the UI plugin can map panes to tab positions.
+/// A `Done` record remains visible while its tab is inactive. Once that tab is
+/// active, the current done record is marked as seen after folding, so later
+/// refreshes render it as `Idle`. Records for unknown panes are ignored because
+/// only the UI plugin can map panes to tab positions.
 pub fn read_tab_statuses(
     session_name: &str,
     active_tab_position: Option<usize>,
     pane_tabs: &HashMap<u32, usize>,
 ) -> TabStatuses {
-    let records = read_session_records(session_name);
-    cleanup_seen(session_name, &records);
+    let statuses = peek_tab_statuses(session_name, pane_tabs);
     if let Some(active_tab_position) = active_tab_position {
-        mark_tab_done_seen(session_name, active_tab_position, &records, pane_tabs);
+        mark_tab_done_seen(
+            session_name,
+            active_tab_position,
+            &statuses.records,
+            pane_tabs,
+        );
     }
-    let tabs = fold_tab_statuses(session_name, &records, pane_tabs);
-    TabStatuses { records, tabs }
+    statuses
 }
 
 /// Records that all currently done panes in a tab have been seen.
@@ -418,7 +435,45 @@ mod tests {
     }
 
     #[test]
-    fn marks_active_tab_done_records_as_seen_before_folding() {
+    fn read_tab_statuses_keeps_inactive_done_until_the_tab_is_viewed() {
+        let session = test_session("done-until-viewed");
+        let _ = fs::remove_dir_all(session_dir(&session));
+        let written_at = now_secs().unwrap_or(1000);
+        write_test_record(&session, 1, &format!("done {written_at} pi"));
+        let pane_tabs = HashMap::from([(1, 0)]);
+
+        let inactive_first = read_tab_statuses(&session, Some(1), &pane_tabs);
+        let inactive_second = read_tab_statuses(&session, Some(1), &pane_tabs);
+        let first_active = read_tab_statuses(&session, Some(0), &pane_tabs);
+        let second_active = read_tab_statuses(&session, Some(0), &pane_tabs);
+
+        assert_eq!(inactive_first.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(inactive_second.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(first_active.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(second_active.tabs.get(&0), Some(&Status::Idle));
+        let _ = fs::remove_dir_all(session_dir(&session));
+    }
+
+    #[test]
+    fn peek_tab_statuses_does_not_consume_done_before_tab_bar_reads_it() {
+        let session = test_session("status-preview");
+        let _ = fs::remove_dir_all(session_dir(&session));
+        let written_at = now_secs().unwrap_or(1000);
+        write_test_record(&session, 1, &format!("done {written_at} pi"));
+        let pane_tabs = HashMap::from([(1, 0)]);
+
+        let preview = peek_tab_statuses(&session, &pane_tabs);
+        let first_active = read_tab_statuses(&session, Some(0), &pane_tabs);
+        let second_active = read_tab_statuses(&session, Some(0), &pane_tabs);
+
+        assert_eq!(preview.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(first_active.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(second_active.tabs.get(&0), Some(&Status::Idle));
+        let _ = fs::remove_dir_all(session_dir(&session));
+    }
+
+    #[test]
+    fn marks_active_tab_done_records_as_seen() {
         let session = test_session("done-seen");
         let _ = fs::remove_dir_all(session_dir(&session));
         let records = HashMap::from([
@@ -462,7 +517,9 @@ mod tests {
         assert_eq!(tabs.get(&0), Some(&Status::Done));
 
         // Once the session is actually viewed (Some active tab), the same
-        // record is marked seen and folds to Idle.
+        // record renders once as Done before later refreshes fold to Idle.
+        let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(0), &pane_tabs);
+        assert_eq!(tabs.get(&0), Some(&Status::Done));
         let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(0), &pane_tabs);
         assert_eq!(tabs.get(&0), Some(&Status::Idle));
         let _ = fs::remove_dir_all(session_dir(&session));
