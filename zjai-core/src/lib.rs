@@ -20,8 +20,6 @@ pub const WORKING_FRAMES: &[&str] = &["✢", "✢", "✻", "✻", "✽", "✽", 
 pub const BLOCKED_FRAMES: &[&str] = &["■", "■", "■", "□", "□", "□"];
 
 const STATUS_ROOT: &str = "/tmp/zjai";
-const SEEN_DIR: &str = ".seen";
-
 /// Backstop for an agent that died without clearing its record. Deliberately
 /// generous: a single long tool call legitimately holds `Working` for a long
 /// time without the producing hook firing again, so this exists to recover
@@ -128,36 +126,6 @@ fn session_dir(session_name: &str) -> PathBuf {
     [STATUS_ROOT, session_name].iter().collect()
 }
 
-fn seen_dir(session_name: &str) -> PathBuf {
-    session_dir(session_name).join(SEEN_DIR)
-}
-
-fn seen_path(session_name: &str, pane_id: u32) -> PathBuf {
-    seen_dir(session_name).join(pane_id.to_string())
-}
-
-fn active_tab_path(session_name: &str) -> PathBuf {
-    session_dir(session_name).join(".active-tab")
-}
-
-fn read_active_tab_position(session_name: &str) -> Option<usize> {
-    fs::read_to_string(active_tab_path(session_name))
-        .ok()
-        .and_then(|contents| contents.trim().parse::<usize>().ok())
-}
-
-fn write_active_tab_position(session_name: &str, tab_position: usize) {
-    let dir = session_dir(session_name);
-    if fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let target = active_tab_path(session_name);
-    let tmp = dir.join(".active-tab.tmp");
-    if fs::write(&tmp, tab_position.to_string()).is_ok() {
-        let _ = fs::rename(tmp, target);
-    }
-}
-
 /// Status records for one session, keyed by terminal pane id.
 ///
 /// Unreadable records are skipped rather than surfaced: this runs on a timer,
@@ -197,115 +165,31 @@ pub fn read_session(session_name: &str) -> HashMap<u32, Status> {
         .collect()
 }
 
-/// Records that the current done status for a pane has been seen.
-pub fn mark_done_seen(session_name: &str, pane_id: u32, written_at: Option<u64>) {
-    let dir = seen_dir(session_name);
-    if fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let target = seen_path(session_name, pane_id);
-    let tmp = dir.join(format!("{}.tmp", pane_id));
-    let contents = written_at.map(|t| t.to_string()).unwrap_or_default();
-    if fs::write(&tmp, contents).is_ok() {
-        let _ = fs::rename(tmp, target);
-    }
-}
-
-/// Returns whether this exact done record has been seen.
-pub fn is_done_seen(session_name: &str, pane_id: u32, record: Record) -> bool {
-    if record.status != Status::Done {
-        return false;
-    }
-    let Ok(contents) = fs::read_to_string(seen_path(session_name, pane_id)) else {
-        return false;
-    };
-    match record.written_at {
-        Some(written_at) => contents.trim().parse::<u64>().ok() == Some(written_at),
-        None => true,
-    }
-}
-
-/// Removes stale seen markers for panes that are no longer done.
-pub fn cleanup_seen(session_name: &str, records: &HashMap<u32, Record>) {
-    let Ok(entries) = fs::read_dir(seen_dir(session_name)) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let Some(pane_id) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let Some(record) = records.get(&pane_id) else {
-            let _ = fs::remove_file(entry.path());
-            continue;
-        };
-        if !is_done_seen(session_name, pane_id, *record) {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
-}
-
-/// Reads records and folds them into renderable tab statuses without marking
-/// `Done` records as seen.
+/// Reads records and folds them into renderable tab statuses.
 ///
-/// This is for read-only UI surfaces such as a cross-session status summary.
-/// Records for unknown panes are ignored because only a UI plugin can map panes
-/// to tab positions.
+/// This is intentionally read-only: the UI plugin never marks `Done` records as
+/// seen. Producers own state transitions, so `Done` remains visible until the
+/// agent or an explicit command writes another status such as `Idle` or
+/// `Working`. Records for unknown panes are ignored because only a UI plugin can
+/// map panes to tab positions.
 pub fn peek_tab_statuses(session_name: &str, pane_tabs: &HashMap<u32, usize>) -> TabStatuses {
     let records = read_session_records(session_name);
-    cleanup_seen(session_name, &records);
     let tabs = fold_tab_statuses(session_name, &records, pane_tabs);
     TabStatuses { records, tabs }
 }
 
 /// Reads records and folds them into renderable tab statuses.
-///
-/// A `Done` record remains visible while its tab is inactive and while it is
-/// being viewed. Once the user leaves that tab, the current done record is
-/// marked as seen, so later refreshes render it as `Idle`. Records for unknown
-/// panes are ignored because only the UI plugin can map panes to tab positions.
 pub fn read_tab_statuses(
     session_name: &str,
-    active_tab_position: Option<usize>,
+    _active_tab_position: Option<usize>,
     pane_tabs: &HashMap<u32, usize>,
 ) -> TabStatuses {
-    let statuses = peek_tab_statuses(session_name, pane_tabs);
-    if let Some(active_tab_position) = active_tab_position {
-        if let Some(previous_tab_position) = read_active_tab_position(session_name) {
-            if previous_tab_position != active_tab_position {
-                mark_tab_done_seen(
-                    session_name,
-                    previous_tab_position,
-                    &statuses.records,
-                    pane_tabs,
-                );
-            }
-        }
-        write_active_tab_position(session_name, active_tab_position);
-    }
-    statuses
-}
-
-/// Records that all currently done panes in a tab have been seen.
-pub fn mark_tab_done_seen(
-    session_name: &str,
-    tab_position: usize,
-    records: &HashMap<u32, Record>,
-    pane_tabs: &HashMap<u32, usize>,
-) {
-    for (&pane_id, &record) in records {
-        if record.status == Status::Done && pane_tabs.get(&pane_id) == Some(&tab_position) {
-            mark_done_seen(session_name, pane_id, record.written_at);
-        }
-    }
+    peek_tab_statuses(session_name, pane_tabs)
 }
 
 /// Folds per-pane records into the most urgent renderable status per tab.
 pub fn fold_tab_statuses(
-    session_name: &str,
+    _session_name: &str,
     records: &HashMap<u32, Record>,
     pane_tabs: &HashMap<u32, usize>,
 ) -> HashMap<usize, Status> {
@@ -314,35 +198,22 @@ pub fn fold_tab_statuses(
         let Some(&tab_position) = pane_tabs.get(&pane_id) else {
             continue;
         };
-        let rendered_status = if is_done_seen(session_name, pane_id, record) {
-            Status::Idle
-        } else {
-            record.status
-        };
         folded
             .entry(tab_position)
-            .and_modify(|existing| *existing = merge(*existing, rendered_status))
-            .or_insert(rendered_status);
+            .and_modify(|existing| *existing = merge(*existing, record.status))
+            .or_insert(record.status);
     }
     folded
 }
 
 /// The most urgent renderable status recorded anywhere in a session, if any.
 ///
-/// Used for the cross-session summary, where per-pane detail is not wanted
-/// and sibling sessions' panes are not knowable from here anyway. Seen `Done`
-/// records render as `Idle`, so a session does not jump back to done after the
-/// user switches away from it.
+/// Used for the cross-session summary, where per-pane detail is not wanted and
+/// sibling sessions' panes are not knowable from here anyway.
 pub fn session_status(session_name: &str) -> Option<Status> {
     read_session_records(session_name)
-        .into_iter()
-        .map(|(pane_id, record)| {
-            if is_done_seen(session_name, pane_id, record) {
-                Status::Idle
-            } else {
-                record.status
-            }
-        })
+        .into_values()
+        .map(|record| record.status)
         .reduce(merge)
 }
 
@@ -462,120 +333,43 @@ mod tests {
     }
 
     #[test]
-    fn read_tab_statuses_keeps_done_until_the_viewed_tab_is_left() {
-        let session = test_session("done-until-left");
+    fn read_tab_statuses_keeps_done_until_producer_changes_it() {
+        let session = test_session("done-owned-by-producer");
         let _ = fs::remove_dir_all(session_dir(&session));
         let written_at = now_secs().unwrap_or(1000);
         write_test_record(&session, 1, &format!("done {written_at} pi"));
         let pane_tabs = HashMap::from([(1, 0)]);
 
-        let inactive_first = read_tab_statuses(&session, Some(1), &pane_tabs);
-        let inactive_second = read_tab_statuses(&session, Some(1), &pane_tabs);
-        let first_active = read_tab_statuses(&session, Some(0), &pane_tabs);
-        let second_active = read_tab_statuses(&session, Some(0), &pane_tabs);
-        let leave_active = read_tab_statuses(&session, Some(1), &pane_tabs);
-        let after_left = read_tab_statuses(&session, Some(1), &pane_tabs);
+        let inactive = read_tab_statuses(&session, Some(1), &pane_tabs);
+        let active = read_tab_statuses(&session, Some(0), &pane_tabs);
+        let still_active = read_tab_statuses(&session, Some(0), &pane_tabs);
+        let left = read_tab_statuses(&session, Some(1), &pane_tabs);
 
-        assert_eq!(inactive_first.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(inactive_second.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(first_active.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(second_active.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(leave_active.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(after_left.tabs.get(&0), Some(&Status::Idle));
+        assert_eq!(inactive.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(active.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(still_active.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(left.tabs.get(&0), Some(&Status::Done));
+
+        write_test_record(&session, 1, &format!("idle {} pi", written_at + 1));
+        let cleared = read_tab_statuses(&session, Some(1), &pane_tabs);
+        assert_eq!(cleared.tabs.get(&0), Some(&Status::Idle));
         let _ = fs::remove_dir_all(session_dir(&session));
     }
 
     #[test]
-    fn peek_tab_statuses_does_not_consume_done_before_tab_bar_reads_it() {
-        let session = test_session("status-preview");
+    fn stale_seen_markers_do_not_hide_done_records() {
+        let session = test_session("ignore-stale-seen");
         let _ = fs::remove_dir_all(session_dir(&session));
         let written_at = now_secs().unwrap_or(1000);
         write_test_record(&session, 1, &format!("done {written_at} pi"));
+        let seen_dir = session_dir(&session).join(".seen");
+        fs::create_dir_all(&seen_dir).unwrap();
+        fs::write(seen_dir.join("1"), written_at.to_string()).unwrap();
         let pane_tabs = HashMap::from([(1, 0)]);
 
-        let preview = peek_tab_statuses(&session, &pane_tabs);
-        let first_active = read_tab_statuses(&session, Some(0), &pane_tabs);
-        let second_active = read_tab_statuses(&session, Some(0), &pane_tabs);
-        let leave_active = read_tab_statuses(&session, Some(1), &pane_tabs);
-        let after_left = read_tab_statuses(&session, Some(1), &pane_tabs);
-
-        assert_eq!(preview.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(first_active.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(second_active.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(leave_active.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(after_left.tabs.get(&0), Some(&Status::Idle));
-        let _ = fs::remove_dir_all(session_dir(&session));
-    }
-
-    #[test]
-    fn marks_active_tab_done_records_as_seen() {
-        let session = test_session("done-seen");
-        let _ = fs::remove_dir_all(session_dir(&session));
-        let records = HashMap::from([
-            (
-                1,
-                Record {
-                    status: Status::Done,
-                    written_at: Some(1000),
-                },
-            ),
-            (
-                2,
-                Record {
-                    status: Status::Done,
-                    written_at: Some(2000),
-                },
-            ),
-        ]);
-        let pane_tabs = HashMap::from([(1, 0), (2, 1)]);
-
-        mark_tab_done_seen(&session, 0, &records, &pane_tabs);
-        let tabs = fold_tab_statuses(&session, &records, &pane_tabs);
-
-        assert_eq!(tabs.get(&0), Some(&Status::Idle));
-        assert_eq!(tabs.get(&1), Some(&Status::Done));
-        let _ = fs::remove_dir_all(session_dir(&session));
-    }
-
-    #[test]
-    fn does_not_mark_done_seen_when_session_is_not_viewed() {
-        // A session whose plugins are running but that no client is attached
-        // to passes `None` for the active tab: nothing is being viewed, so a
-        // `Done` record must survive as `Done` rather than being marked seen.
-        let session = test_session("no-view-no-mark");
-        let _ = fs::remove_dir_all(session_dir(&session));
-        let written_at = now_secs().unwrap_or(1000);
-        write_test_record(&session, 1, &format!("done {written_at} cloudcode"));
-        let pane_tabs = HashMap::from([(1u32, 0usize)]);
-
-        let TabStatuses { tabs, .. } = read_tab_statuses(&session, None, &pane_tabs);
+        let tabs = read_tab_statuses(&session, Some(0), &pane_tabs).tabs;
         assert_eq!(tabs.get(&0), Some(&Status::Done));
-
-        // Once the session is actually viewed (Some active tab), the same
-        // record stays Done until that tab is left.
-        let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(0), &pane_tabs);
-        assert_eq!(tabs.get(&0), Some(&Status::Done));
-        let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(0), &pane_tabs);
-        assert_eq!(tabs.get(&0), Some(&Status::Done));
-        let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(1), &pane_tabs);
-        assert_eq!(tabs.get(&0), Some(&Status::Done));
-        let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(1), &pane_tabs);
-        assert_eq!(tabs.get(&0), Some(&Status::Idle));
-        let _ = fs::remove_dir_all(session_dir(&session));
-    }
-
-    #[test]
-    fn session_status_renders_seen_done_records_as_idle() {
-        let session = test_session("session-seen-done");
-        let _ = fs::remove_dir_all(session_dir(&session));
-        let written_at = now_secs().unwrap_or(1000);
-        write_test_record(&session, 1, &format!("done {written_at} pi"));
-
         assert_eq!(session_status(&session), Some(Status::Done));
-
-        mark_done_seen(&session, 1, Some(written_at));
-
-        assert_eq!(session_status(&session), Some(Status::Idle));
         let _ = fs::remove_dir_all(session_dir(&session));
     }
 }
