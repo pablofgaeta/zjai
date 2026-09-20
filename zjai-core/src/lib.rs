@@ -136,6 +136,28 @@ fn seen_path(session_name: &str, pane_id: u32) -> PathBuf {
     seen_dir(session_name).join(pane_id.to_string())
 }
 
+fn active_tab_path(session_name: &str) -> PathBuf {
+    session_dir(session_name).join(".active-tab")
+}
+
+fn read_active_tab_position(session_name: &str) -> Option<usize> {
+    fs::read_to_string(active_tab_path(session_name))
+        .ok()
+        .and_then(|contents| contents.trim().parse::<usize>().ok())
+}
+
+fn write_active_tab_position(session_name: &str, tab_position: usize) {
+    let dir = session_dir(session_name);
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let target = active_tab_path(session_name);
+    let tmp = dir.join(".active-tab.tmp");
+    if fs::write(&tmp, tab_position.to_string()).is_ok() {
+        let _ = fs::rename(tmp, target);
+    }
+}
+
 /// Status records for one session, keyed by terminal pane id.
 ///
 /// Unreadable records are skipped rather than surfaced: this runs on a timer,
@@ -241,10 +263,10 @@ pub fn peek_tab_statuses(session_name: &str, pane_tabs: &HashMap<u32, usize>) ->
 
 /// Reads records and folds them into renderable tab statuses.
 ///
-/// A `Done` record remains visible while its tab is inactive. Once that tab is
-/// active, the current done record is marked as seen after folding, so later
-/// refreshes render it as `Idle`. Records for unknown panes are ignored because
-/// only the UI plugin can map panes to tab positions.
+/// A `Done` record remains visible while its tab is inactive and while it is
+/// being viewed. Once the user leaves that tab, the current done record is
+/// marked as seen, so later refreshes render it as `Idle`. Records for unknown
+/// panes are ignored because only the UI plugin can map panes to tab positions.
 pub fn read_tab_statuses(
     session_name: &str,
     active_tab_position: Option<usize>,
@@ -252,12 +274,17 @@ pub fn read_tab_statuses(
 ) -> TabStatuses {
     let statuses = peek_tab_statuses(session_name, pane_tabs);
     if let Some(active_tab_position) = active_tab_position {
-        mark_tab_done_seen(
-            session_name,
-            active_tab_position,
-            &statuses.records,
-            pane_tabs,
-        );
+        if let Some(previous_tab_position) = read_active_tab_position(session_name) {
+            if previous_tab_position != active_tab_position {
+                mark_tab_done_seen(
+                    session_name,
+                    previous_tab_position,
+                    &statuses.records,
+                    pane_tabs,
+                );
+            }
+        }
+        write_active_tab_position(session_name, active_tab_position);
     }
     statuses
 }
@@ -435,8 +462,8 @@ mod tests {
     }
 
     #[test]
-    fn read_tab_statuses_keeps_inactive_done_until_the_tab_is_viewed() {
-        let session = test_session("done-until-viewed");
+    fn read_tab_statuses_keeps_done_until_the_viewed_tab_is_left() {
+        let session = test_session("done-until-left");
         let _ = fs::remove_dir_all(session_dir(&session));
         let written_at = now_secs().unwrap_or(1000);
         write_test_record(&session, 1, &format!("done {written_at} pi"));
@@ -446,11 +473,15 @@ mod tests {
         let inactive_second = read_tab_statuses(&session, Some(1), &pane_tabs);
         let first_active = read_tab_statuses(&session, Some(0), &pane_tabs);
         let second_active = read_tab_statuses(&session, Some(0), &pane_tabs);
+        let leave_active = read_tab_statuses(&session, Some(1), &pane_tabs);
+        let after_left = read_tab_statuses(&session, Some(1), &pane_tabs);
 
         assert_eq!(inactive_first.tabs.get(&0), Some(&Status::Done));
         assert_eq!(inactive_second.tabs.get(&0), Some(&Status::Done));
         assert_eq!(first_active.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(second_active.tabs.get(&0), Some(&Status::Idle));
+        assert_eq!(second_active.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(leave_active.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(after_left.tabs.get(&0), Some(&Status::Idle));
         let _ = fs::remove_dir_all(session_dir(&session));
     }
 
@@ -465,10 +496,14 @@ mod tests {
         let preview = peek_tab_statuses(&session, &pane_tabs);
         let first_active = read_tab_statuses(&session, Some(0), &pane_tabs);
         let second_active = read_tab_statuses(&session, Some(0), &pane_tabs);
+        let leave_active = read_tab_statuses(&session, Some(1), &pane_tabs);
+        let after_left = read_tab_statuses(&session, Some(1), &pane_tabs);
 
         assert_eq!(preview.tabs.get(&0), Some(&Status::Done));
         assert_eq!(first_active.tabs.get(&0), Some(&Status::Done));
-        assert_eq!(second_active.tabs.get(&0), Some(&Status::Idle));
+        assert_eq!(second_active.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(leave_active.tabs.get(&0), Some(&Status::Done));
+        assert_eq!(after_left.tabs.get(&0), Some(&Status::Idle));
         let _ = fs::remove_dir_all(session_dir(&session));
     }
 
@@ -517,10 +552,14 @@ mod tests {
         assert_eq!(tabs.get(&0), Some(&Status::Done));
 
         // Once the session is actually viewed (Some active tab), the same
-        // record renders once as Done before later refreshes fold to Idle.
+        // record stays Done until that tab is left.
         let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(0), &pane_tabs);
         assert_eq!(tabs.get(&0), Some(&Status::Done));
         let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(0), &pane_tabs);
+        assert_eq!(tabs.get(&0), Some(&Status::Done));
+        let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(1), &pane_tabs);
+        assert_eq!(tabs.get(&0), Some(&Status::Done));
+        let TabStatuses { tabs, .. } = read_tab_statuses(&session, Some(1), &pane_tabs);
         assert_eq!(tabs.get(&0), Some(&Status::Idle));
         let _ = fs::remove_dir_all(session_dir(&session));
     }
